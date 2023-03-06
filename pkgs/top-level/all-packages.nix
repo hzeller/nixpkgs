@@ -37339,6 +37339,8 @@ with pkgs;
 
   pcb = callPackage ../applications/science/electronics/pcb { };
 
+  pcb-rnd = callPackage ../applications/science/electronics/pcb-rnd { };
+
   qucs = callPackage ../applications/science/electronics/qucs { };
 
   qucs-s = callPackage ../applications/science/electronics/qucs-s { };

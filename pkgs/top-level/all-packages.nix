@@ -38047,6 +38047,8 @@ with pkgs;
     withNgshared = false;
   };
 
+  librnd4 = callPackage ../applications/science/electronics/librnd { };
+
   nvc = darwin.apple_sdk_11_0.callPackage ../applications/science/electronics/nvc { };
 
   openems = callPackage ../applications/science/electronics/openems {

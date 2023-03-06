@@ -37323,6 +37323,8 @@ with pkgs;
 
   librepcb = libsForQt5.callPackage ../applications/science/electronics/librepcb { };
 
+  librnd4 = callPackage ../applications/science/electronics/librnd { };
+
   ngspice = callPackage ../applications/science/electronics/ngspice { };
 
   nvc = callPackage ../applications/science/electronics/nvc { };

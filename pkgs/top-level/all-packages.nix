@@ -38065,6 +38065,8 @@ with pkgs;
 
   pcb-rnd = callPackage ../applications/science/electronics/pcb-rnd { };
 
+  sch-rnd = callPackage ../applications/science/electronics/sch-rnd { };
+
   xcircuit = callPackage ../applications/science/electronics/xcircuit { };
 
   xoscope = callPackage ../applications/science/electronics/xoscope { };

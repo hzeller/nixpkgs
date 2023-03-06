@@ -37345,6 +37345,8 @@ with pkgs;
 
   qucs-s = callPackage ../applications/science/electronics/qucs-s { };
 
+  sch-rnd = callPackage ../applications/science/electronics/sch-rnd { };
+
   xcircuit = callPackage ../applications/science/electronics/xcircuit { };
 
   xoscope = callPackage ../applications/science/electronics/xoscope { };

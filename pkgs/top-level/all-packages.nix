@@ -17557,6 +17557,8 @@ with pkgs;
 
   mspdebug = callPackage ../development/misc/msp430/mspdebug.nix { };
 
+  nanosvg = callPackage ../development/libraries/nanosvg { };
+
   vc4-newlib = callPackage ../development/misc/vc4/newlib.nix { };
 
   or1k-newlib = callPackage ../development/misc/or1k/newlib.nix { };

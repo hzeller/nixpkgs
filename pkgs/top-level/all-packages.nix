@@ -36366,6 +36366,8 @@ with pkgs;
 
   vimiv-qt = callPackage ../applications/graphics/vimiv-qt { };
 
+  visicut = callPackage ../applications/graphics/visicut { };
+
   macvim = callPackage ../applications/editors/vim/macvim-configurable.nix { stdenv = clangStdenv; };
 
   vim-full = vimUtils.makeCustomizable (callPackage ../applications/editors/vim/full.nix {

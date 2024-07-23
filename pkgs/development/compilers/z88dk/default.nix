@@ -12,14 +12,14 @@
   pkg-config,
 }:
 
-stdenv.mkDerivation rec {
+stdenv.mkDerivation (finalAttrs: {
   pname = "z88dk";
   version = "2.3";
 
   src = fetchFromGitHub {
     owner = "z88dk";
     repo = "z88dk";
-    rev = "v${version}";
+    rev = "v${finalAttrs.version}";
     hash = "sha256-CHTORgK6FYIO6n+cvTUX4huY2Ek5FuHrs40QN5NZX44=";
     fetchSubmodules = true;
   };
@@ -41,17 +41,18 @@ stdenv.mkDerivation rec {
   checkPhase = ''
     make testsuite
   '';
+
   #failed on Issue_1105_function_pointer_calls
   doCheck = stdenv.hostPlatform.system != "aarch64-linux";
 
   #_FORTIFY_SOURCE requires compiling with optimization (-O)
   env.NIX_CFLAGS_COMPILE = "-O";
 
-  short_rev = builtins.substring 0 7 src.rev;
+  short_rev = builtins.substring 0 7 finalAttrs.src.rev;
   makeFlags = [
     "PREFIX=''"
-    "git_rev=${short_rev}"
-    "version=${version}"
+    "git_rev=${finalAttrs.short_rev}"
+    "version=${finalAttrs.version}"
     "DESTDIR=$(out)"
     "git_count=0"
   ];
@@ -85,4 +86,4 @@ stdenv.mkDerivation rec {
     maintainers = [ maintainers.siraben ];
     platforms = platforms.unix;
   };
-}
+})

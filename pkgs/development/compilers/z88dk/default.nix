@@ -35,6 +35,9 @@ stdenv.mkDerivation rec {
       --replace 'ALL_EXT = bin/zsdcc$(EXESUFFIX)' 'ALL_EXT ='
   '';
 
+
+  enableParallelBuilding = false;   # This is not working yet.
+
   checkPhase = ''
     make testsuite
   '';
@@ -46,6 +49,7 @@ stdenv.mkDerivation rec {
 
   short_rev = builtins.substring 0 7 src.rev;
   makeFlags = [
+    "PREFIX=''"
     "git_rev=${short_rev}"
     "version=${version}"
     "DESTDIR=$(out)"

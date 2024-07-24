@@ -15,8 +15,8 @@
 }:
 
 let
-  # Perl packages used by this project
-  # TODO: put these into global perl-packages.nix
+  # Perl packages used by this project.
+  # TODO: put these into global perl-packages.nix once this is submitted.
   ObjectTinyRW = perlPackages.buildPerlPackage {
     pname = "Object-Tiny-RW";
     version = "1.07";
@@ -26,10 +26,7 @@ let
     };
     meta = {
       description = "A date object with as little code as possible (and rw accessors)";
-      license = with lib.licenses; [
-        artistic1
-        gpl1Plus
-      ];
+      license = with lib.licenses; [ artistic1 gpl1Plus ];
     };
   };
 
@@ -42,10 +39,7 @@ let
     };
     meta = {
       description = "Simple iterator and utilities";
-      license = with lib.licenses; [
-        artistic1
-        gpl2Only
-      ];
+      license = with lib.licenses; [ artistic1 gpl2Only ];
     };
   };
 
@@ -56,13 +50,12 @@ let
       url = "mirror://cpan/authors/id/P/PS/PSCUST/Iterator-Simple-Lookahead-0.09.tar.gz";
       hash = "sha256-FmPE1xdU8LAXS21+H4DJaQ87qDi4Q4UkLawsUAqseZw=";
     };
-    propagatedBuildInputs = [ IteratorSimple ] ++ (with perlPackages; [ ClassAccessor ]);
+    propagatedBuildInputs = [ IteratorSimple ] ++ (with perlPackages; [
+      ClassAccessor
+    ]);
     meta = {
       description = "Simple iterator with lookahead and unget";
-      license = with lib.licenses; [
-        artistic1
-        gpl2Only
-      ];
+      license = with lib.licenses; [ artistic1 gpl2Only ];
     };
   };
 
@@ -73,22 +66,17 @@ let
       url = "mirror://cpan/authors/id/P/PS/PSCUST/Asm-Preproc-1.03.tar.gz";
       hash = "sha256-pVTpIqGxZpBxZlAbXuGDapuOxsp3uM/AM5dKUxlej1M=";
     };
-    propagatedBuildInputs =
-      [
+    propagatedBuildInputs = [
         IteratorSimple
         IteratorSimpleLookahead
-      ]
-      ++ (with perlPackages; [
+      ] ++ (with perlPackages; [
         TextTemplate
         DataDump
         FileSlurp
       ]);
     meta = {
       description = "Preprocessor to be called from an assembler";
-      license = with lib.licenses; [
-        artistic1
-        gpl2Only
-      ];
+      license = with lib.licenses; [ artistic1 gpl2Only ];
     };
   };
 
@@ -99,9 +87,7 @@ let
       url = "mirror://cpan/authors/id/P/PS/PSCUST/CPU-Z80-Assembler-2.25.tar.gz";
       hash = "sha256-cJ8Fl2KZw9/bnBDUzFuwwdw9x23OUvcftk78kw7abdU=";
     };
-    buildInputs =
-      [ AsmPreproc ]
-      ++ (with perlPackages; [
+    buildInputs = [ AsmPreproc ] ++ (with perlPackages; [
         CaptureTiny
         RegexpTrie
         PathTiny
@@ -109,10 +95,7 @@ let
       ]);
     meta = {
       description = "Functions to assemble a set of Z80 assembly instructions";
-      license = with lib.licenses; [
-        artistic1
-        gpl2Only
-      ];
+      license = with lib.licenses; [ artistic1 gpl2Only ];
     };
   };
 in
@@ -169,8 +152,7 @@ stdenv.mkDerivation (finalAttrs: {
     "git_count=0"
   ];
 
-  nativeBuildInputs =
-    [
+  nativeBuildInputs = [
       which
       unzip
       m4
@@ -181,8 +163,7 @@ stdenv.mkDerivation (finalAttrs: {
       AsmPreproc
       CPUZ80Assembler
       ObjectTinyRW
-    ]
-    ++ (with perlPackages; [
+    ] ++ (with perlPackages; [
       CaptureTiny
       DataHexDump
       ModernPerl

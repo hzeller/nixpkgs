@@ -30,7 +30,7 @@ let
 in
 stdenv.mkDerivation rec {
   pname = "or-tools";
-  version = "9.7";
+  version = "9.11";
 
   src = fetchFromGitHub {
     owner = "google";
@@ -64,6 +64,7 @@ stdenv.mkDerivation rec {
     "-DCMAKE_INSTALL_INCLUDEDIR=include"
     "-DCMAKE_INSTALL_LIBDIR=lib"
     "-DFETCH_PYTHON_DEPS=OFF"
+    "-DBUILD_SHARED_LIBS=OFF"  # https://github.com/google/or-tools/issues/3709
     "-DUSE_GLPK=ON"
     "-DUSE_SCIP=OFF"
     "-DPython3_EXECUTABLE=${python.pythonOnBuildForHost.interpreter}"

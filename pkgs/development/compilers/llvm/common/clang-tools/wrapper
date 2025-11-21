@@ -12,6 +12,10 @@ buildcpath() {
             shift
             after=$after${after:+':'}$1
             ;;
+        -cxx-isystem)
+            shift
+            path=$path${path:+':'}$1
+            ;;
     esac
     shift
   done

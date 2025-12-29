@@ -1,0 +1,2318 @@
+diff --git a/.github/workflows/rust-xous-release.yml b/.github/workflows/rust-xous-release.yml
+new file mode 100644
+index 0000000000000..f5337206c86a4
+--- /dev/null
++++ b/.github/workflows/rust-xous-release.yml
+@@ -0,0 +1,66 @@
++name: Rust for Xous
++
++on: [push]
++
++jobs:
++  build-libstd:
++    runs-on: ubuntu-latest
++
++    steps:
++      - name: Setup riscv gnu/gcc toolchain
++        uses: gregdavill/setup-riscv-gnu-toolchain@v1.0
++
++      - name: Checkout
++        uses: actions/checkout@v2
++        with:
++          submodules: 'recursive'
++
++      - name: Determine Rust version
++        shell: bash
++        run: echo "version=$(echo ${GITHUB_REF} | cut -d/ -f3 | cut -d- -f1 | cut -d. -f1,2,3)" >> $GITHUB_OUTPUT
++        id: extract_rust_version
++
++      - name: Install Rust toolchain v${{ steps.extract_rust_version.outputs.version }}
++        uses: actions-rs/toolchain@v1
++        with:
++          toolchain: ${{ steps.extract_rust_version.outputs.version }}
++          default: true
++          override: true
++          target: riscv32imac-unknown-none-elf
++
++      - name: Install riscv32imac-unknown-xous-elf toolchain file
++        run: |
++          rm -rf $(rustc --print sysroot)/lib/rustlib/riscv32imac-unknown-xous-elf \
++          && mkdir -p $(rustc --print sysroot)/lib/rustlib/riscv32imac-unknown-xous-elf/lib \
++          && rustc --version | awk '{print $2}' > $(rustc --print sysroot)/lib/rustlib/riscv32imac-unknown-xous-elf/RUST_VERSION
++
++      - name: Build Rust libstd
++        run: |
++          export RUST_COMPILER_RT_ROOT=$(pwd)/src/llvm-project/compiler-rt \
++          && rm -rf target \
++          && cargo build \
++            --target riscv32imac-unknown-xous-elf \
++            -Zbinary-dep-depinfo \
++            --release \
++            --features "panic-unwind compiler-builtins-c compiler-builtins-mem" \
++            --manifest-path "library/sysroot/Cargo.toml" \
++          && cp library/target/riscv32imac-unknown-xous-elf/release/deps/*.rlib $(rustc --print sysroot)/lib/rustlib/riscv32imac-unknown-xous-elf/lib \
++          && (dest=$(pwd) && cd $(rustc --print sysroot) && zip -r ${dest}/riscv32imac-unknown-xous_${{ steps.extract_rust_version.outputs.version }}.zip lib/rustlib/riscv32imac-unknown-xous-elf/)
++        env:
++          CARGO_PROFILE_RELEASE_DEBUG: 0
++          CARGO_PROFILE_RELEASE_OPT_LEVEL: 3
++          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: false
++          RUSTC_BOOTSTRAP: 1
++          RUSTFLAGS: -Cforce-unwind-tables=yes -Cembed-bitcode=yes -Zforce-unstable-if-unmarked
++          __CARGO_DEFAULT_LIB_METADATA: stablestd
++          CC: riscv-none-embed-gcc
++          AR: riscv-none-embed-ar
++
++      - name: Release
++        uses: softprops/action-gh-release@v1
++        if: startsWith(github.ref, 'refs/tags/')
++        with:
++          files: |
++            riscv32imac-unknown-xous_${{ steps.extract_rust_version.outputs.version }}.zip
++        env:
++          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/README.markdown b/README.markdown
+new file mode 100755
+index 0000000000000..12fd9464f5e52
+--- /dev/null
++++ b/README.markdown
+@@ -0,0 +1,44 @@
++# Rust Stable for Xous
++
++Build stable Rust binaries for Xous! This release targets Rust 1.91.0.
++
++## Installing Prebuilt Releases
++
++1. Ensure you are running Rust 1.91.0. Future versions of Rust will need a different version of this software.
++2. Download the latest release from the [releases](https://github.com/betrusted-io/rust/releases/latest) page
++3. Unzip the zipfile to your Rust sysroot. On Unix systems can do this with something like:
++```sh
++cd $(rustc --print sysroot)
++wget https://github.com/betrusted-io/rust/releases/latest/download/riscv32imac-unknown-xous_1.91.0.zip
++rm -rf lib/rustlib/riscv32imac-unknown-xous-elf # Remove any existing version
++unzip *.zip
++rm *.zip
++cd -
++```
++
++On Windows with Powershell you can run:
++
++```powershell
++Push-Location $(rustc --print sysroot)
++if (Test-Path lib\rustlib\riscv32imac-unknown-xous-elf) { Remove-Item -Recurse -Force lib\rustlib\riscv32imac-unknown-xous-elf }
++Invoke-WebRequest -Uri https://github.com/betrusted-io/rust/releases/latest/download/riscv32imac-unknown-xous_1.91.0.zip -Outfile toolchain.zip
++Expand-Archive -DestinationPath . -Path toolchain.zip
++Remove-Item toolchain.zip
++Pop-Location
++```
++
++## Building From Source
++
++1. Install a RISC-V toolchain, and ensure it's in your path. Set `CC` and `AR` to point to the toolchain's -gcc and -ar binaries.
++2. Run `./rebuild.sh`. This will build libstd and install it.
++
++## Building on Windows Powershell
++
++On Windows, you can use the `rebuild.ps1` script to build and install this package. You will need
++to have a Riscv compiler in your path.
++
++Run `rebuild.ps1`. It is recommended that you run it under a new shell in order to avoid polluting your environment with Rust-specific variables:
++
++```powershell
++powershell .\rebuild.ps1
++```
+diff --git a/library/std/src/collections/hash/map/tests.rs b/library/std/src/collections/hash/map/tests.rs
+index 9f7df20a1d7e4..c69e4e179cea2 100644
+--- a/library/std/src/collections/hash/map/tests.rs
++++ b/library/std/src/collections/hash/map/tests.rs
+@@ -270,11 +270,11 @@ fn test_lots_of_insertions() {
+
+     // Try this a few times to make sure we never screw up the hashmap's
+     // internal state.
+-    let loops = if cfg!(miri) { 2 } else { 10 };
++    let loops = if cfg!(miri) || cfg!(target_os = "xous") { 2 } else { 10 };
+     for _ in 0..loops {
+         assert!(m.is_empty());
+
+-        let count = if cfg!(miri) { 66 } else { 1001 };
++        let count = if cfg!(miri) || cfg!(target_os = "xous") { 66 } else { 1001 };
+
+         for i in 1..count {
+             assert!(m.insert(i, i).is_none());
+diff --git a/library/std/src/io/tests.rs b/library/std/src/io/tests.rs
+index b22988d4a8a9d..b7b79dd1e37a0 100644
+--- a/library/std/src/io/tests.rs
++++ b/library/std/src/io/tests.rs
+@@ -358,6 +358,7 @@ fn chain_zero_length_read_is_not_eof() {
+ }
+
+ #[bench]
++#[cfg_attr(target_os = "xous", ignore)]
+ #[cfg_attr(miri, ignore)] // Miri isn't fast...
+ fn bench_read_to_end(b: &mut test::Bencher) {
+     b.iter(|| {
+diff --git a/library/std/src/os/xous/fs.rs b/library/std/src/os/xous/fs.rs
+new file mode 100644
+index 0000000000000..cd19095bd0c23
+--- /dev/null
++++ b/library/std/src/os/xous/fs.rs
+@@ -0,0 +1,33 @@
++#![stable(feature = "rust1", since = "1.0.0")]
++
++use crate::fs;
++use crate::sys_common::AsInner;
++
++#[stable(feature = "file_type_ext", since = "1.5.0")]
++pub trait FileTypeExt {
++    /// Returns `true` if this file type is a basis.
++    ///
++    /// # Examples
++    ///
++    /// ```no_run
++    /// use std::fs;
++    /// use std::os::xous::fs::FileTypeExt;
++    /// use std::io;
++    ///
++    /// fn main() -> io::Result<()> {
++    ///     let meta = fs::metadata(":.System")?;
++    ///     let file_type = meta.file_type();
++    ///     assert!(file_type.is_basis());
++    ///     Ok(())
++    /// }
++    /// ```
++    #[stable(feature = "file_type_ext", since = "1.5.0")]
++    fn is_basis(&self) -> bool;
++}
++
++#[stable(feature = "file_type_ext", since = "1.5.0")]
++impl FileTypeExt for fs::FileType {
++    fn is_basis(&self) -> bool {
++        self.as_inner().is_basis()
++    }
++}
+diff --git a/library/std/src/os/xous/mod.rs b/library/std/src/os/xous/mod.rs
+index 4b21695c4ac7e..644327ac51498 100644
+--- a/library/std/src/os/xous/mod.rs
++++ b/library/std/src/os/xous/mod.rs
+@@ -7,6 +7,9 @@ pub mod ffi;
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub mod services;
+
++pub mod fs;
++pub mod path;
++
+ /// A prelude for conveniently writing platform-specific code.
+ ///
+ /// Includes all extension traits, and some important type definitions.
+diff --git a/library/std/src/os/xous/path.rs b/library/std/src/os/xous/path.rs
+new file mode 100644
+index 0000000000000..1856164da80e0
+--- /dev/null
++++ b/library/std/src/os/xous/path.rs
+@@ -0,0 +1,40 @@
++#![stable(feature = "rust1", since = "1.0.0")]
++
++use crate::path;
++
++#[stable(feature = "file_type_ext", since = "1.5.0")]
++pub trait PathExt {
++    /// Returns `true` if this file type is a basis.
++    ///
++    /// # Examples
++    ///
++    /// ```no_run
++    /// use std::fs;
++    /// use std::os::xous::fs::FileTypeExt;
++    /// use std::io;
++    ///
++    /// fn main() -> io::Result<()> {
++    ///     let meta = fs::metadata(":.System")?;
++    ///     let file_type = meta.file_type();
++    ///     assert!(file_type.is_basis());
++    ///     Ok(())
++    /// }
++    /// ```
++    #[stable(feature = "file_type_ext", since = "1.5.0")]
++    fn is_basis(&self) -> bool;
++}
++
++#[stable(feature = "file_type_ext", since = "1.5.0")]
++impl PathExt for path::Path {
++    fn is_basis(&self) -> bool {
++        let Some(as_str) = self.as_os_str().to_str() else {
++             return false;
++        };
++
++        let Ok(path) = crate::sys::path::split_basis_dict_key(as_str) else {
++            return false;
++        };
++
++        path.basis.is_some() && path.dict.is_none() && path.key.is_none()
++    }
++}
+diff --git a/library/std/src/os/xous/services.rs b/library/std/src/os/xous/services.rs
+index 0681485ea0610..ce8c502558ffd 100644
+--- a/library/std/src/os/xous/services.rs
++++ b/library/std/src/os/xous/services.rs
+@@ -11,6 +11,9 @@ pub(crate) use log::*;
+ mod net;
+ pub(crate) use net::*;
+
++mod pddb;
++pub(crate) use pddb::*;
++
+ mod systime;
+ pub(crate) use systime::*;
+
+diff --git a/library/std/src/os/xous/services/pddb.rs b/library/std/src/os/xous/services/pddb.rs
+new file mode 100644
+index 0000000000000..f8459b5bac9a4
+--- /dev/null
++++ b/library/std/src/os/xous/services/pddb.rs
+@@ -0,0 +1,88 @@
++use crate::io::SeekFrom;
++use crate::os::xous::ffi::Connection;
++use crate::os::xous::services::connect;
++use core::sync::atomic::{AtomicU32, Ordering};
++
++#[repr(usize)]
++pub(crate) enum PddbBlockingScalar {
++    SeekKeyStd(u16 /* fd */, SeekFrom),
++    CloseKeyStd(u16 /* fd */),
++}
++
++#[repr(usize)]
++pub(crate) enum PddbLendMut {
++    OpenKeyStd,
++    ReadKeyStd(u16 /* fd */),
++    DeleteKeyStd = 35,
++    ListPathStd = 37,
++    StatPathStd = 38,
++
++    /// Create a dict
++    CreateDictStd,
++
++    /// Remove an empty dict
++    DeleteDictStd,
++}
++
++#[repr(usize)]
++pub(crate) enum PddbLend {
++    WriteKeyStd(u16 /* fd */),
++}
++
++impl Into<usize> for PddbLendMut {
++    fn into(self) -> usize {
++        match self {
++            PddbLendMut::OpenKeyStd => 30,
++            PddbLendMut::ReadKeyStd(fd) => 31 | ((fd as usize) << 16),
++            PddbLendMut::DeleteKeyStd => 35,
++            PddbLendMut::ListPathStd => 37,
++            PddbLendMut::StatPathStd => 38,
++            PddbLendMut::CreateDictStd => 40,
++            PddbLendMut::DeleteDictStd => 41,
++        }
++    }
++}
++
++impl Into<usize> for PddbLend {
++    fn into(self) -> usize {
++        match self {
++            PddbLend::WriteKeyStd(fd) => 32 | ((fd as usize) << 16),
++        }
++    }
++}
++
++impl<'a> Into<[usize; 5]> for PddbBlockingScalar {
++    fn into(self) -> [usize; 5] {
++        match self {
++            PddbBlockingScalar::SeekKeyStd(fd, from) => {
++                let (a1, a2, a3) = match from {
++                    SeekFrom::Start(off) => {
++                        (0, (off as usize & 0xffff_ffff), ((off >> 32) as usize) & 0xffff_ffff)
++                    }
++                    SeekFrom::Current(off) => {
++                        (1, (off as usize & 0xffff_ffff), ((off >> 32) as usize) & 0xffff_ffff)
++                    }
++                    SeekFrom::End(off) => {
++                        (2, (off as usize & 0xffff_ffff), ((off >> 32) as usize) & 0xffff_ffff)
++                    }
++                };
++                [39 | ((fd as usize) << 16), a1, a2, a3, 0]
++            }
++            PddbBlockingScalar::CloseKeyStd(fd) => [34 | ((fd as usize) << 16), 0, 0, 0, 0],
++        }
++    }
++}
++
++/// Return a `Connection` to the PDDB database server. This server is used for
++/// communicating with the persistent database.
++pub(crate) fn pddb_server() -> Connection {
++    static PDDB_CONNECTION: AtomicU32 = AtomicU32::new(0);
++    let cid = PDDB_CONNECTION.load(Ordering::Relaxed);
++    if cid != 0 {
++        return cid.into();
++    }
++
++    let cid = connect("_Plausibly Deniable Database_").unwrap();
++    PDDB_CONNECTION.store(cid.into(), Ordering::Relaxed);
++    cid
++}
+diff --git a/library/std/src/sys/fs/mod.rs b/library/std/src/sys/fs/mod.rs
+index 0276bf6e64c8b..5ed99e673473a 100644
+--- a/library/std/src/sys/fs/mod.rs
++++ b/library/std/src/sys/fs/mod.rs
+@@ -39,6 +39,10 @@ cfg_select! {
+         mod wasi;
+         use wasi as imp;
+     }
++    target_os = "xous" => {
++        mod xous;
++        use xous as imp;
++    }
+     _ => {
+         mod unsupported;
+         use unsupported as imp;
+diff --git a/library/std/src/sys/fs/xous.rs b/library/std/src/sys/fs/xous.rs
+new file mode 100644
+index 0000000000000..a47b50eba64e6
+--- /dev/null
++++ b/library/std/src/sys/fs/xous.rs
+@@ -0,0 +1,656 @@
++mod senres;
++
++use alloc::str::FromStr;
++
++use crate::ffi::OsString;
++use crate::fmt;
++use crate::fs::TryLockError;
++use crate::hash::Hash;
++use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
++use crate::os::xous::ffi::{OsStrExt, blocking_scalar, lend_mut};
++use crate::os::xous::services::{PddbBlockingScalar, PddbLend, PddbLendMut, pddb_server};
++use crate::path::{Path, PathBuf};
++use crate::sys::time::SystemTime;
++use crate::sys::{unsupported, unsupported_err};
++use senres::{Senres, SenresMut, Stack};
++
++pub use crate::sys::fs::common::exists;
++
++pub struct File {
++    fd: u16,
++    len: u64,
++}
++
++#[derive(Clone)]
++pub struct FileAttr {
++    pub(crate) kind: FileType,
++    pub(crate) len: u64,
++}
++
++pub struct ReadDir {
++    root: PathBuf,
++    entries: Vec<DirEntry>,
++}
++
++pub struct DirEntry {
++    name: String,
++    path: String,
++    // basis: Option<String>,
++    kind: FileType,
++}
++
++#[derive(Clone, Debug)]
++pub struct OpenOptions {
++    create_file: bool,
++    append: bool,
++    truncate: bool,
++    create_new: bool,
++}
++
++#[derive(Copy, Clone, Debug, Default)]
++pub struct FileTimes {}
++
++#[derive(Clone, PartialEq, Eq, Debug)]
++pub struct FilePermissions {}
++
++#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
++pub enum FileType {
++    Basis = 0,
++    Dict = 1,
++    Key = 2,
++    /// This represents both a dict and a key that share the same name
++    DictKey = 3,
++    None = 4,
++    Unknown = 5,
++}
++
++#[derive(Debug)]
++pub struct DirBuilder {}
++
++impl FileAttr {
++    pub fn size(&self) -> u64 {
++        self.len
++    }
++
++    pub fn perm(&self) -> FilePermissions {
++        FilePermissions {}
++    }
++
++    pub fn file_type(&self) -> FileType {
++        self.kind
++    }
++
++    pub fn modified(&self) -> io::Result<SystemTime> {
++        // println!("rust: FileAttr::copy()");
++        unsupported()
++    }
++
++    pub fn accessed(&self) -> io::Result<SystemTime> {
++        // println!("rust: FileAttr::accessed()");
++        unsupported()
++    }
++
++    pub fn created(&self) -> io::Result<SystemTime> {
++        // println!("rust: FileAttr::created()");
++        unsupported()
++    }
++}
++
++impl FilePermissions {
++    pub fn readonly(&self) -> bool {
++        false
++    }
++
++    pub fn set_readonly(&mut self, _readonly: bool) {}
++}
++
++impl FileTimes {
++    pub fn set_accessed(&mut self, _t: SystemTime) {}
++    pub fn set_modified(&mut self, _t: SystemTime) {}
++}
++
++impl FileType {
++    pub fn is_dir(&self) -> bool {
++        let is_dir = match *self {
++            FileType::Basis | FileType::Dict | FileType::DictKey => true,
++            FileType::Key | FileType::Unknown | FileType::None => false,
++        };
++        // println!("rust: {:?} is_dir()? {:?}", self, is_dir);
++        is_dir
++    }
++
++    pub fn is_file(&self) -> bool {
++        let is_file = match *self {
++            FileType::DictKey | FileType::Key => true,
++            FileType::Basis | FileType::Dict | FileType::Unknown | FileType::None => false,
++        };
++        // println!("rust: {:?} is_file()? {:?}", self, is_file);
++        is_file
++    }
++
++    pub fn is_symlink(&self) -> bool {
++        false
++    }
++
++    pub fn is_basis(&self) -> bool {
++        *self == FileType::Basis
++    }
++}
++
++impl Iterator for ReadDir {
++    type Item = io::Result<DirEntry>;
++
++    fn next(&mut self) -> Option<io::Result<DirEntry>> {
++        self.entries.pop().map(|v| Ok(v))
++    }
++}
++
++impl fmt::Debug for ReadDir {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        // This will only be called from std::fs::ReadDir, which will add a "ReadDir()" frame.
++        // Thus the result will be e g 'ReadDir("C:\")'
++        fmt::Debug::fmt(&*self.root, f)
++    }
++}
++
++impl DirEntry {
++    pub fn path(&self) -> PathBuf {
++        PathBuf::from_str(&self.path).unwrap()
++    }
++
++    pub fn file_name(&self) -> OsString {
++        crate::ffi::OsStr::from_bytes(self.name.as_bytes()).to_os_string()
++    }
++
++    pub fn metadata(&self) -> io::Result<FileAttr> {
++        match self.kind {
++            FileType::None | FileType::Unknown => Err(crate::io::Error::new(
++                crate::io::ErrorKind::NotFound,
++                "File or directory does not exist, or is corrupted",
++            )),
++            _ => Ok(FileAttr { kind: self.kind, len: 0 }),
++        }
++    }
++
++    pub fn file_type(&self) -> io::Result<FileType> {
++        Ok(self.kind)
++    }
++}
++
++impl OpenOptions {
++    pub fn new() -> OpenOptions {
++        OpenOptions { create_file: false, truncate: false, append: false, create_new: false }
++    }
++
++    pub fn read(&mut self, _read: bool) {}
++    pub fn write(&mut self, _write: bool) {}
++    pub fn append(&mut self, append: bool) {
++        self.append = append;
++    }
++    pub fn truncate(&mut self, truncate: bool) {
++        self.truncate = truncate;
++    }
++    pub fn create(&mut self, create: bool) {
++        self.create_file = create;
++    }
++    pub fn create_new(&mut self, create_new: bool) {
++        self.create_new = create_new;
++    }
++}
++
++impl File {
++    pub fn open(path: &Path, opts: &OpenOptions) -> io::Result<File> {
++        let mut request = Stack::<4096>::new();
++        let path_as_str = path.as_os_str().to_str().ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++
++        {
++            let mut writer = request.writer(*b"KyOQ").ok_or_else(|| {
++                crate::io::Error::new(
++                    crate::io::ErrorKind::InvalidFilename,
++                    "unable to create request",
++                )
++            })?;
++
++            writer.append(path_as_str);
++            writer.append(opts.create_file);
++            writer.append(false); // create_path
++            writer.append(opts.create_new);
++            writer.append(opts.append);
++            writer.append(opts.truncate);
++            writer.append(0u64); // alloc_hint
++            writer.append::<Option<[u32; 4]>>(None); // callback SID
++        }
++
++        // Make the actual call
++        let (err, _) =
++            request.lend_mut(pddb_server(), PddbLendMut::OpenKeyStd.into()).or_else(|_| {
++                Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++            })?;
++
++        if err != 0 {
++            return Err(crate::io::Error::new(
++                crate::io::ErrorKind::Other,
++                "error occurred when opening file",
++            ));
++        }
++
++        let reader = request.reader(*b"KyOR").ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::Other, "invalid response from server")
++        })?;
++
++        let fd: u16 = reader.try_get_from().or_else(|_| {
++            Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++        })?;
++
++        let len: u64 = reader.try_get_from().or_else(|_| {
++            Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++        })?;
++
++        Ok(File { len, fd })
++    }
++
++    pub fn file_attr(&self) -> io::Result<FileAttr> {
++        Ok(FileAttr { kind: FileType::Key, len: self.len })
++    }
++
++    pub fn fsync(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn datasync(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn lock(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn lock_shared(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn try_lock(&self) -> Result<(), TryLockError> {
++        Err(TryLockError::Error(unsupported_err()))
++    }
++
++    pub fn try_lock_shared(&self) -> Result<(), TryLockError> {
++        Err(TryLockError::Error(unsupported_err()))
++    }
++
++    pub fn unlock(&self) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn truncate(&self, _size: u64) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
++        #[repr(C, align(4096))]
++        struct ReadBuffer {
++            data: [u8; 4096],
++        }
++        let mut buffer = ReadBuffer { data: [0u8; 4096] };
++        let buffer_len = buffer.data.len();
++
++        let (offset, valid) = lend_mut(
++            pddb_server(),
++            PddbLendMut::ReadKeyStd(self.fd).into(),
++            &mut buffer.data,
++            0,
++            buf.len().min(buffer_len),
++        )
++        .map_err(|_| {
++            crate::io::Error::new(crate::io::ErrorKind::Other, "read() encountered an error")
++        })?;
++
++        if offset != 0 {
++            return Err(crate::io::Error::new(
++                crate::io::ErrorKind::Other,
++                "read() encountered an error",
++            ));
++        }
++        let valid = buf.len().min(valid).min(buffer.data.len());
++        let contents = &buffer.data[0..valid];
++        for (src, dest) in contents.iter().zip(buf.iter_mut()) {
++            *dest = *src;
++        }
++        Ok(valid)
++    }
++
++    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
++        crate::io::default_read_vectored(|buf| self.read(buf), bufs)
++    }
++
++    pub fn is_read_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn read_buf(&self, cursor: BorrowedCursor<'_>) -> io::Result<()> {
++        crate::io::default_read_buf(|buf| self.read(buf), cursor)
++    }
++
++    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
++        #[repr(C, align(4096))]
++        struct ReadBuffer {
++            data: [u8; 4096],
++        }
++        let mut buffer = ReadBuffer { data: [0u8; 4096] };
++
++        let valid = buf.len().min(buffer.data.len());
++        {
++            let contents = &mut buffer.data[0..valid];
++            for (src, dest) in buf.iter().zip(contents.iter_mut()) {
++                *dest = *src;
++            }
++        }
++
++        // This needs to be mutable for now because pddb uses libxous which doesn't
++        // support returning values with non-mutable lends, and we need to get the
++        // "offset" as a return value.
++        let (offset, valid) = lend_mut(
++            pddb_server(),
++            PddbLend::WriteKeyStd(self.fd).into(),
++            &mut buffer.data,
++            0,
++            valid,
++        )
++        .map_err(|_| {
++            crate::io::Error::new(crate::io::ErrorKind::Other, "write() encountered an error")
++        })?;
++
++        if offset == 0 {
++            Ok(valid)
++        } else {
++            Err(crate::io::Error::new(
++                crate::io::ErrorKind::Other,
++                "write operation encountered an error",
++            ))
++        }
++    }
++
++    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
++        crate::io::default_write_vectored(|buf| self.write(buf), bufs)
++    }
++
++    pub fn is_write_vectored(&self) -> bool {
++        false
++    }
++
++    pub fn flush(&self) -> io::Result<()> {
++        // println!("rust: File::flush()");
++        unsupported()
++    }
++
++    pub fn seek(&self, pos: SeekFrom) -> io::Result<u64> {
++        let result =
++            blocking_scalar(pddb_server(), PddbBlockingScalar::SeekKeyStd(self.fd, pos).into())
++                .map_err(|_| {
++                    crate::io::Error::new(crate::io::ErrorKind::NotSeekable, "error when seeking")
++                })?;
++
++        Ok((result[0] as u64) | ((result[1] as u64) << 32))
++    }
++
++    pub fn size(&self) -> Option<io::Result<u64>> {
++        match self.file_attr().map(|attr| attr.len) {
++            Ok(0) => None,
++            result => Some(result),
++        }
++    }
++
++    pub fn tell(&self) -> io::Result<u64> {
++        self.seek(SeekFrom::Current(0))
++    }
++
++    pub fn duplicate(&self) -> io::Result<File> {
++        unsupported()
++    }
++
++    pub fn set_permissions(&self, _perm: FilePermissions) -> io::Result<()> {
++        unsupported()
++    }
++
++    pub fn set_times(&self, _times: FileTimes) -> io::Result<()> {
++        unsupported()
++    }
++}
++
++impl Drop for File {
++    fn drop(&mut self) {
++        blocking_scalar(pddb_server(), PddbBlockingScalar::CloseKeyStd(self.fd).into()).unwrap();
++    }
++}
++
++impl DirBuilder {
++    pub fn new() -> DirBuilder {
++        DirBuilder {}
++    }
++
++    pub fn mkdir(&self, p: &Path) -> io::Result<()> {
++        let path_as_str = p.as_os_str().to_str().ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++
++        let mut request = Stack::<4096>::new();
++
++        let mut writer = request.writer(*b"NuDQ").ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++        writer.append(path_as_str);
++
++        // Make the actual call
++        request.lend_mut(pddb_server(), PddbLendMut::CreateDictStd.into()).or_else(|_| {
++            Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++        })?;
++        Ok(())
++    }
++}
++
++impl fmt::Debug for File {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("File").field("fd", &self.fd).finish()
++    }
++}
++
++pub fn readdir(p: &Path) -> io::Result<ReadDir> {
++    let path_as_str = p.as_os_str().to_str().ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++    })?;
++    crate::sys::path::split_basis_dict_key(path_as_str).or_else(|_| {
++        Err(crate::io::Error::new(crate::io::ErrorKind::Other, "path was not valid"))
++    })?;
++
++    let mut request = Stack::<4096>::new();
++
++    // Write the request to the call
++    {
++        let mut writer = request.writer(*b"PthQ").ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++        writer.append(path_as_str);
++    }
++
++    // Make the actual call
++    request.lend_mut(pddb_server(), PddbLendMut::ListPathStd.into()).or_else(|_| {
++        Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++    })?;
++
++    // Read the data back
++    let reader = request.reader(*b"PthR").ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::Other, "invalid response from server")
++    })?;
++
++    let mut entries = vec![];
++    let count = reader.try_get_from::<u32>().unwrap() as usize;
++    for _ in 0..count {
++        let name = reader.try_get_ref_from().unwrap();
++        let kind = match reader.try_get_from::<u8>() {
++            Ok(0) => FileType::Basis,
++            Ok(1) => FileType::Dict,
++            Ok(2) => FileType::Key,
++            Ok(3) => FileType::DictKey,
++            Ok(4) => FileType::None,
++            _ => FileType::Unknown,
++        };
++        let mut path = path_as_str.to_owned();
++        if !path.is_empty() && !path.ends_with(crate::path::MAIN_SEPARATOR) {
++            path.push(crate::path::MAIN_SEPARATOR);
++        }
++        path.push_str(name);
++        entries.push(DirEntry {
++            name: name.to_owned(),
++            path,
++            // basis: basis.map(|m| m.to_owned()),
++            kind,
++        });
++    }
++
++    return Ok(ReadDir { entries, root: p.to_owned() });
++}
++
++pub fn unlink(p: &Path) -> io::Result<()> {
++    let path_as_str = p.as_os_str().to_str().ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++    })?;
++    let mut request = Stack::<4096>::new();
++    {
++        let mut writer = request.writer(*b"RmKQ").ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++        writer.append(path_as_str);
++    }
++
++    // Make the actual call
++    let (err, _) =
++        request.lend_mut(pddb_server(), PddbLendMut::DeleteKeyStd.into()).or_else(|_| {
++            Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++        })?;
++
++    if err != 0 {
++        return Err(crate::io::Error::new(crate::io::ErrorKind::Other, "error during operation"));
++    }
++    Ok(())
++}
++
++pub fn rename(_old: &Path, _new: &Path) -> io::Result<()> {
++    // println!("rust: rename()");
++    unsupported()
++}
++
++pub fn set_perm(_p: &Path, _perm: FilePermissions) -> io::Result<()> {
++    // println!("rust: set_perm()");
++    unsupported()
++}
++
++pub fn rmdir(p: &Path) -> io::Result<()> {
++    let path_as_str = p.as_os_str().to_str().ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++    })?;
++
++    let mut request = Stack::<4096>::new();
++
++    let mut writer = request.writer(*b"RmDQ").ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++    })?;
++    writer.append(path_as_str);
++
++    // Make the actual call
++    let (err, _) =
++        request.lend_mut(pddb_server(), PddbLendMut::DeleteDictStd.into()).or_else(|_| {
++            Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++        })?;
++    if err != 0 {
++        return Err(crate::io::Error::new(crate::io::ErrorKind::Other, "error during operation"));
++    }
++    Ok(())
++}
++
++pub fn remove_dir_all(path: &Path) -> io::Result<()> {
++    for child in readdir(path)? {
++        let child = child?;
++        let child_type = child.file_type()?;
++        if child_type.is_dir() {
++            remove_dir_all(&child.path())?;
++        } else {
++            unlink(&child.path())?;
++        }
++    }
++    rmdir(path)
++}
++
++pub fn readlink(p: &Path) -> io::Result<PathBuf> {
++    stat(p)?;
++    Err(io::const_error!(io::ErrorKind::InvalidInput, "not a symbolic link"))
++}
++
++pub fn symlink(_original: &Path, _link: &Path) -> io::Result<()> {
++    // This target doesn't support symlinks
++    unsupported()
++}
++
++pub fn link(_src: &Path, _dst: &Path) -> io::Result<()> {
++    // This target doesn't support links
++    unsupported()
++}
++
++pub fn stat(p: &Path) -> io::Result<FileAttr> {
++    let path_as_str = p.as_os_str().to_str().ok_or_else(|| {
++        crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++    })?;
++    let mut request = Stack::<4096>::new();
++
++    // Write the request to the call
++    {
++        let mut writer = request.writer(*b"StaQ").ok_or_else(|| {
++            crate::io::Error::new(crate::io::ErrorKind::InvalidFilename, "invalid path")
++        })?;
++        writer.append(path_as_str);
++    }
++
++    // Make the actual call
++    request.lend_mut(pddb_server(), PddbLendMut::StatPathStd.into()).or_else(|_| {
++        Err(crate::io::Error::new(crate::io::ErrorKind::Other, "unable to query database"))
++    })?;
++
++    // Read the data back
++    let reader = request.reader(*b"StaR").expect("unable to get reader");
++    let kind = match reader.try_get_from::<u8>() {
++        Ok(0) => FileType::Basis,
++        Ok(1) => FileType::Dict,
++        Ok(2) => FileType::Key,
++        Ok(3) => FileType::DictKey,
++        Ok(4) => FileType::None,
++        Ok(5) => FileType::Unknown,
++        _ => FileType::Unknown,
++    };
++
++    match kind {
++        FileType::None | FileType::Unknown => Err(crate::io::Error::new(
++            crate::io::ErrorKind::NotFound,
++            "File or directory does not exist, or is corrupted",
++        )),
++        _ => Ok(FileAttr { kind, len: 0 }),
++    }
++}
++
++pub fn lstat(p: &Path) -> io::Result<FileAttr> {
++    // This target doesn't support symlinks
++    stat(p)
++}
++
++pub fn canonicalize(_p: &Path) -> io::Result<PathBuf> {
++    // println!("rust: canonicalize()");
++    unsupported()
++}
++
++pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
++    use crate::fs::File;
++
++    let mut reader = File::open(from)?;
++    let mut writer = File::create(to)?;
++
++    io::copy(&mut reader, &mut writer)
++}
+diff --git a/library/std/src/sys/fs/xous/senres.rs b/library/std/src/sys/fs/xous/senres.rs
+new file mode 100644
+index 0000000000000..5ce453fa04601
+--- /dev/null
++++ b/library/std/src/sys/fs/xous/senres.rs
+@@ -0,0 +1,628 @@
++#![allow(unused)]
++#![allow(elided_lifetimes_in_paths)]
++
++use crate::os::xous::ffi::{Connection, InvokeType, Syscall, SyscallResult};
++use core::cell::Cell;
++use core::convert::TryInto;
++
++/// Senres V1 always begins with the number 0x344cb6ca to indicate it's valid.
++/// This number will change on subsequent versions.
++const SENRES_V1_MAGIC: u32 = 0x344cb6ca;
++
++/// A struct to send and receive data. This struct must be page-aligned
++/// in order to be sendable across processes.
++#[repr(C, align(4096))]
++pub struct Stack<const N: usize = 4096> {
++    data: [u8; N],
++}
++
++/// A version of the message on the receiving side, reconstituted from
++/// a slice from a message.
++pub struct Message<'a> {
++    message_id: usize,
++    auto_return: bool,
++    data: &'a [u8],
++}
++
++/// A version of the message on the receiving side, reconstituted from
++/// a slice from a message.
++pub struct MutableMessage<'a> {
++    message_id: usize,
++    mutable: bool,
++    auto_return: bool,
++    data: &'a mut [u8],
++}
++
++impl<'a> Message<'a> {
++    pub fn new(message_id: usize, data: usize, len: usize, mutable: bool) -> Result<Self, ()> {
++        if data & 4095 != 0 || len & 4095 != 0 {
++            return Err(());
++        }
++        Ok(Message {
++            message_id,
++            auto_return: true,
++            data: unsafe {
++                core::slice::from_raw_parts_mut(crate::ptr::with_exposed_provenance_mut::<u8>(data), len)
++            },
++        })
++    }
++    // Need to figure out how to make the non-mutable version work, since `data`
++    // must be a mutable vec.
++    pub fn from_slice(data: &'a [u8]) -> Result<Self, ()> {
++        Ok(Message { message_id: 0, auto_return: false, data })
++    }
++    pub fn from_mut_slice(data: &'a mut [u8]) -> Result<MutableMessage<'a>, ()> {
++        Ok(MutableMessage { message_id: 0, mutable: true, auto_return: false, data })
++    }
++    pub fn auto_return(&mut self, enable: bool) {
++        self.auto_return = enable;
++    }
++}
++
++#[cfg(target_os = "xous")]
++fn return_memory_message(message_id: usize, data_addr: usize, data_len: usize) -> usize {
++    let a0 = Syscall::ReturnMemory as usize;
++
++    // "Offset"
++    let a4 = 0;
++
++    // "Valid"
++    let a5 = 0;
++
++    let mut result: usize;
++
++    unsafe {
++        core::arch::asm!(
++            "ecall",
++            inlateout("a0") a0 => result,
++            inlateout("a1") message_id => _,
++            inlateout("a2") data_addr => _,
++            inlateout("a3") data_len=> _,
++            inlateout("a4") a4 => _,
++            inlateout("a5") a5 => _,
++            out("a6") _,
++            out("a7") _,
++        )
++    };
++    result
++}
++
++impl<'a> Drop for Message<'a> {
++    fn drop(&mut self) {
++        if self.auto_return {
++            #[cfg(target_os = "xous")]
++            return_memory_message(self.message_id, self.data.as_ptr() as usize, self.data.len());
++        }
++    }
++}
++
++impl<'a> SenresMut for MutableMessage<'a> {
++    fn as_mut_slice(&mut self) -> &mut [u8] {
++        self.data
++    }
++    fn as_mut_ptr(&mut self) -> *mut u8 {
++        self as *mut _ as *mut u8
++    }
++}
++
++impl<'a> Senres for MutableMessage<'a> {
++    fn as_slice(&self) -> &[u8] {
++        self.data
++    }
++    fn len(&self) -> usize {
++        self.data.len()
++    }
++    fn as_ptr(&self) -> *const u8 {
++        self as *const _ as *const u8
++    }
++    fn can_create_writer(&self) -> bool {
++        self.mutable
++    }
++}
++
++impl<'a> Senres for Message<'a> {
++    fn as_slice(&self) -> &[u8] {
++        self.data
++    }
++    fn len(&self) -> usize {
++        self.data.len()
++    }
++    fn as_ptr(&self) -> *const u8 {
++        self as *const _ as *const u8
++    }
++    fn can_create_writer(&self) -> bool {
++        false
++    }
++}
++
++pub trait Senres {
++    fn as_slice(&self) -> &[u8];
++    fn as_ptr(&self) -> *const u8;
++    fn len(&self) -> usize;
++
++    fn can_create_writer(&self) -> bool {
++        true
++    }
++
++    fn reader(&self, fourcc: [u8; 4]) -> Option<Reader<'_, Self>>
++    where
++        Self: core::marker::Sized,
++    {
++        let reader = Reader { backing: self, offset: core::cell::Cell::new(0) };
++        if SENRES_V1_MAGIC != reader.try_get_from().ok()? {
++            return None;
++        }
++        let target_fourcc: [u8; 4] = reader.try_get_from().ok()?;
++        if target_fourcc != fourcc {
++            return None;
++        }
++        Some(reader)
++    }
++
++    #[cfg(not(target_os = "xous"))]
++    fn lend(&self, _connection: u32, _opcode: usize) -> Result<(), ()> {
++        Ok(())
++    }
++
++    #[cfg(target_os = "xous")]
++    fn lend(&self, connection: u32, opcode: usize) -> Result<(), ()> {
++        let mut a0 = Syscall::SendMessage as usize;
++        let a1: usize = connection.try_into().unwrap();
++        let a2 = InvokeType::Lend as usize;
++        let a3 = opcode;
++        let a4 = self.as_ptr() as usize;
++        let a5 = self.len();
++
++        unsafe {
++            core::arch::asm!(
++                "ecall",
++                inlateout("a0") a0,
++                inlateout("a1") a1 => _,
++                inlateout("a2") a2 => _,
++                inlateout("a3") a3 => _,
++                inlateout("a4") a4 => _,
++                inlateout("a5") a5 => _,
++                out("a6") _,
++                out("a7") _,
++            )
++        };
++
++        let result = a0;
++        if result == SyscallResult::MemoryReturned as usize {
++            Ok(())
++        } else {
++            println!("Unexpected memory return value: {}", result);
++            Err(())
++        }
++    }
++}
++
++pub trait SenresMut: Senres {
++    fn as_mut_slice(&mut self) -> &mut [u8];
++    fn as_mut_ptr(&mut self) -> *mut u8;
++    fn writer(&mut self, fourcc: [u8; 4]) -> Option<Writer<'_, Self>>
++    where
++        Self: core::marker::Sized,
++    {
++        if !self.can_create_writer() {
++            return None;
++        }
++        let mut writer = Writer { backing: self, offset: 0 };
++        writer.append(SENRES_V1_MAGIC);
++        writer.append(fourcc);
++        Some(writer)
++    }
++    #[cfg(not(target_os = "xous"))]
++    fn lend_mut(&mut self, _connection: u32, _opcode: usize) -> Result<(usize, usize), ()> {
++        Ok((0, 0))
++    }
++    #[cfg(target_os = "xous")]
++    fn lend_mut(&mut self, connection: Connection, opcode: usize) -> Result<(usize, usize), ()> {
++        crate::os::xous::ffi::lend_mut(connection, opcode, self.as_mut_slice(), 0, 0).map_err(|_| ())
++    }
++}
++
++pub struct Writer<'a, Backing: SenresMut> {
++    backing: &'a mut Backing,
++    offset: usize,
++}
++
++pub struct DelayedWriter<Backing: SenresMut, T: SenSer<Backing>> {
++    offset: usize,
++    _kind: core::marker::PhantomData<T>,
++    _backing: core::marker::PhantomData<Backing>,
++}
++
++pub struct Reader<'a, Backing: Senres> {
++    backing: &'a Backing,
++    offset: Cell<usize>,
++}
++
++pub trait SenSer<Backing: SenresMut> {
++    fn append_to(&self, senres: &mut Writer<Backing>);
++}
++
++pub trait RecDes<Backing: Senres> {
++    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()>
++    where
++        Self: core::marker::Sized;
++}
++
++pub trait RecDesRef<'a, Backing: Senres> {
++    fn try_get_ref_from(senres: &'a Reader<Backing>) -> Result<&'a Self, ()>;
++}
++
++impl<const N: usize> Stack<N> {
++    /// Ensure that `N` is a multiple of 4096. This constant should
++    /// be evaluated in the constructor function.
++    const CHECK_ALIGNED: () = if N & 4095 != 0 {
++        panic!("Senres size must be a multiple of 4096")
++    };
++
++    pub const fn new() -> Self {
++        // Ensure the `N` that was specified is a multiple of 4096
++        #[allow(clippy::no_effect, clippy::let_unit_value)]
++        let _ = Self::CHECK_ALIGNED;
++        Stack { data: [0u8; N] }
++    }
++}
++
++impl<const N: usize> SenresMut for Stack<N> {
++    fn as_mut_slice(&mut self) -> &mut [u8] {
++        self.data.as_mut_slice()
++    }
++    fn as_mut_ptr(&mut self) -> *mut u8 {
++        &mut self.data as *mut _ as *mut u8
++    }
++}
++
++impl<const N: usize> Senres for Stack<N> {
++    fn as_slice(&self) -> &[u8] {
++        self.data.as_slice()
++    }
++    fn len(&self) -> usize {
++        N
++    }
++    fn as_ptr(&self) -> *const u8 {
++        &self.data as *const _ as *const u8
++    }
++}
++
++impl<'a, Backing: SenresMut> Writer<'a, Backing> {
++    pub fn append<T: SenSer<Backing>>(&mut self, other: T) {
++        other.append_to(self);
++    }
++
++    pub fn delayed_append<T: SenSer<Backing>>(&mut self) -> DelayedWriter<Backing, T> {
++        let delayed_writer = DelayedWriter {
++            offset: self.offset,
++            _backing: core::marker::PhantomData::<Backing>,
++            _kind: core::marker::PhantomData::<T>,
++        };
++        self.offset += core::mem::size_of::<T>();
++        delayed_writer
++    }
++
++    pub fn do_delayed_append<T: SenSer<Backing>>(
++        &mut self,
++        delayed_writer: DelayedWriter<Backing, T>,
++        other: T,
++    ) {
++        let current_offset = self.offset;
++        self.offset = delayed_writer.offset;
++        other.append_to(self);
++        if self.offset != delayed_writer.offset + core::mem::size_of::<T>() {
++            panic!("writer incorrectly increased offset");
++        }
++        self.offset = current_offset;
++    }
++
++    pub fn align_to(&mut self, alignment: usize) {
++        while self.offset & (alignment - 1) != 0 {
++            self.offset += 1;
++        }
++    }
++}
++
++impl<'a, Backing: Senres> Reader<'a, Backing> {
++    pub fn try_get_from<T: RecDes<Backing>>(&self) -> Result<T, ()> {
++        T::try_get_from(self)
++    }
++
++    pub fn try_get_ref_from<T: RecDesRef<'a, Backing> + ?Sized>(&'a self) -> Result<&'a T, ()> {
++        T::try_get_ref_from(self)
++    }
++
++    fn align_to(&self, alignment: usize) {
++        while self.offset.get() & (alignment - 1) != 0 {
++            self.offset.set(self.offset.get() + 1);
++        }
++    }
++}
++
++macro_rules! primitive_impl {
++    ($SelfT:ty) => {
++        impl<Backing: SenresMut> SenSer<Backing> for $SelfT {
++            fn append_to(&self, senres: &mut Writer<Backing>) {
++                senres.align_to(core::mem::align_of::<Self>());
++                for (src, dest) in self
++                    .to_le_bytes()
++                    .iter()
++                    .zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
++                {
++                    *dest = *src;
++                    senres.offset += 1;
++                }
++            }
++        }
++
++        impl<Backing: Senres> RecDes<Backing> for $SelfT {
++            fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
++                senres.align_to(core::mem::align_of::<Self>());
++                let my_size = core::mem::size_of::<Self>();
++                let offset = senres.offset.get();
++                if offset + my_size > senres.backing.as_slice().len() {
++                    return Err(());
++                }
++                let val = Self::from_le_bytes(
++                    senres.backing.as_slice()[offset..offset + my_size].try_into().unwrap(),
++                );
++                senres.offset.set(offset + my_size);
++                Ok(val)
++            }
++        }
++    };
++}
++
++impl<Backing: SenresMut> SenSer<Backing> for bool {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        senres.align_to(core::mem::align_of::<Self>());
++        senres.backing.as_mut_slice()[senres.offset] = if *self { 1 } else { 0 };
++        senres.offset += 1;
++    }
++}
++
++impl<Backing: Senres> RecDes<Backing> for bool {
++    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
++        senres.align_to(core::mem::align_of::<Self>());
++        let my_size = core::mem::size_of::<Self>();
++        let offset = senres.offset.get();
++        if offset + my_size > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        let val = match senres.backing.as_slice()[offset] {
++            0 => Ok(false),
++            1 => Ok(true),
++            _ => Err(()),
++        };
++        senres.offset.set(offset + my_size);
++        val
++    }
++}
++
++impl<T: SenSer<Backing>, Backing: SenresMut> SenSer<Backing> for Option<T> {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        if let Some(val) = self {
++            senres.append(1u8);
++            val.append_to(senres);
++        } else {
++            senres.append(0u8);
++        }
++    }
++}
++
++impl<T: RecDes<Backing>, Backing: Senres> RecDes<Backing> for Option<T> {
++    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
++        if senres.offset.get() + 1 > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        let check = senres.try_get_from::<u8>()?;
++        if check == 0 {
++            return Ok(None);
++        }
++        if check != 1 {
++            return Err(());
++        }
++        let my_size = core::mem::size_of::<Self>();
++        if senres.offset.get() + my_size > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        Ok(Some(T::try_get_from(senres)?))
++    }
++}
++
++primitive_impl! {u8}
++primitive_impl! {i8}
++primitive_impl! {u16}
++primitive_impl! {i16}
++primitive_impl! {u32}
++primitive_impl! {i32}
++primitive_impl! {u64}
++primitive_impl! {i64}
++
++impl<T: SenSer<Backing>, Backing: SenresMut> SenSer<Backing> for &[T] {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        senres.append(self.len() as u32);
++        for entry in self.iter() {
++            entry.append_to(senres)
++        }
++    }
++}
++
++impl<T: SenSer<Backing>, Backing: SenresMut, const N: usize> SenSer<Backing> for [T; N] {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        // senres.append(self.len() as u32);
++        senres.align_to(core::mem::align_of::<Self>());
++        for entry in self.iter() {
++            entry.append_to(senres)
++        }
++    }
++}
++
++impl<T: RecDes<Backing>, Backing: Senres, const N: usize> RecDes<Backing> for [T; N] {
++    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
++        let len = core::mem::size_of::<Self>();
++        senres.align_to(core::mem::align_of::<Self>());
++        let offset = senres.offset.get();
++        if offset + len > senres.backing.as_slice().len() {
++            return Err(());
++        }
++
++        // See https://github.com/rust-lang/rust/issues/61956 for why this
++        // is awful
++        let mut output: [core::mem::MaybeUninit<T>; N] =
++            unsafe { core::mem::MaybeUninit::uninit().assume_init() };
++        for elem in &mut output[..] {
++            elem.write(T::try_get_from(senres)?);
++        }
++
++        // Using &mut as an assertion of unique "ownership"
++        let ptr = &mut output as *mut _ as *mut [T; N];
++        let res = unsafe { ptr.read() };
++        core::mem::forget(output);
++        Ok(res)
++    }
++}
++
++impl<Backing: SenresMut> SenSer<Backing> for str {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        senres.append(self.len() as u32);
++        for (src, dest) in
++            self.as_bytes().iter().zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
++        {
++            *dest = *src;
++            senres.offset += 1;
++        }
++    }
++}
++
++impl<Backing: SenresMut> SenSer<Backing> for &str {
++    fn append_to(&self, senres: &mut Writer<Backing>) {
++        senres.append(self.len() as u32);
++        for (src, dest) in
++            self.as_bytes().iter().zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
++        {
++            *dest = *src;
++            senres.offset += 1;
++        }
++    }
++}
++
++impl<Backing: Senres> RecDes<Backing> for String {
++    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
++        let len = senres.try_get_from::<u32>()? as usize;
++        let offset = senres.offset.get();
++        if offset + len > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        core::str::from_utf8(&senres.backing.as_slice()[offset..offset + len]).or(Err(())).map(
++            |e| {
++                senres.offset.set(offset + len);
++                e.to_owned()
++            },
++        )
++    }
++}
++
++impl<'a, Backing: Senres> RecDesRef<'a, Backing> for str {
++    fn try_get_ref_from(senres: &'a Reader<Backing>) -> Result<&'a Self, ()> {
++        let len = senres.try_get_from::<u32>()? as usize;
++        let offset = senres.offset.get();
++        if offset + len > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        core::str::from_utf8(&senres.backing.as_slice()[offset..offset + len]).or(Err(())).map(
++            |e| {
++                senres.offset.set(offset + len);
++                e
++            },
++        )
++    }
++}
++
++impl<'a, Backing: Senres, T: RecDes<Backing>> RecDesRef<'a, Backing> for [T] {
++    fn try_get_ref_from(senres: &'a Reader<Backing>) -> Result<&'a Self, ()> {
++        let len = senres.try_get_from::<u32>()? as usize;
++        let offset = senres.offset.get();
++        if offset + (len * core::mem::size_of::<T>()) > senres.backing.as_slice().len() {
++            return Err(());
++        }
++        let ret = unsafe {
++            core::slice::from_raw_parts(
++                senres.backing.as_slice().as_ptr().add(offset) as *const T,
++                len,
++            )
++        };
++        senres.offset.set(offset + len * core::mem::size_of::<T>());
++        Ok(ret)
++    }
++}
++
++impl<const N: usize> Default for Stack<N> {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++fn do_stuff(_r: &Stack) {
++    println!("Stuff!");
++}
++
++#[test]
++fn smoke_test() {
++    let mut sr1 = Stack::<4096>::new();
++    // let sr2 = Senres::<4097>::new();
++    let sr3 = Stack::<8192>::new();
++    // let sr4 = Senres::<4098>::new();
++    let sr5 = Stack::new();
++
++    do_stuff(&sr5);
++    println!("Size of sr1: {}", core::mem::size_of_val(&sr1));
++    println!("Size of sr3: {}", core::mem::size_of_val(&sr3));
++    println!("Size of sr5: {}", core::mem::size_of_val(&sr5));
++
++    {
++        let mut writer = sr1.writer(*b"test").unwrap();
++        writer.append(16777215u32);
++        writer.append(u64::MAX);
++        writer.append("Hello, world!");
++        writer.append("String2");
++        writer.append::<Option<u32>>(None);
++        writer.append::<Option<u32>>(Some(42));
++        writer.append(96u8);
++        writer.append([1i32, 2, 3, 4, 5].as_slice());
++        writer.append([5u8, 4, 3, 2].as_slice());
++        writer.append([5u16, 4, 2]);
++        writer.append(["Hi", "There", "123456789"]);
++        // writer.append(["Hello".to_owned(), "There".to_owned(), "World".to_owned()].as_slice());
++    }
++    // println!("sr1: {:?}", sr1);
++
++    {
++        let reader = sr1.reader(*b"test").expect("couldn't get reader");
++        let val: u32 = reader.try_get_from().expect("couldn't get the u32 value");
++        println!("u32 val: {}", val);
++        let val: u64 = reader.try_get_from().expect("couldn't get the u64 value");
++        println!("u64 val: {:x}", val);
++        let val: &str = reader.try_get_ref_from().expect("couldn't get string value");
++        println!("String val: {}", val);
++        let val: String = reader.try_get_from().expect("couldn't get string2 value");
++        println!("String2 val: {}", val);
++        let val: Option<u32> = reader.try_get_from().expect("couldn't get Option<u32>");
++        println!("Option<u32> val: {:?}", val);
++        let val: Option<u32> = reader.try_get_from().expect("couldn't get Option<u32>");
++        println!("Option<u32> val: {:?}", val);
++
++        let val: u8 = reader.try_get_from().expect("couldn't get u8 weird padding");
++        println!("u8 val: {}", val);
++
++        let val: &[i32] = reader.try_get_ref_from().expect("couldn't get &[i32]");
++        println!("&[i32] val: {:?}", val);
++        let val: &[u8] = reader.try_get_ref_from().expect("couldn't get &[u8]");
++        println!("&[u8] val: {:?}", val);
++        let val: [u16; 3] = reader.try_get_from().expect("couldn't get [u16; 3]");
++        println!("[u16; 3] val: {:?}", val);
++        let val: [String; 3] = reader.try_get_from().expect("couldn't get [String; 3]");
++        println!("[String; 3] val: {:?}", val);
++    }
++}
+diff --git a/library/std/src/sys/pal/xous/mod.rs b/library/std/src/sys/pal/xous/mod.rs
+index e673157e0eb55..1208516652d38 100644
+--- a/library/std/src/sys/pal/xous/mod.rs
++++ b/library/std/src/sys/pal/xous/mod.rs
+@@ -1,7 +1,5 @@
+ #![forbid(unsafe_op_in_unsafe_fn)]
+
+-use crate::os::xous::ffi::exit;
+-
+ pub mod os;
+ #[path = "../unsupported/pipe.rs"]
+ pub mod pipe;
+@@ -10,7 +8,3 @@ pub mod time;
+ #[path = "../unsupported/common.rs"]
+ mod common;
+ pub use common::*;
+-
+-pub fn abort_internal() -> ! {
+-    exit(101);
+-}
+diff --git a/library/std/src/sys/pal/xous/os.rs b/library/std/src/sys/pal/xous/os.rs
+index d9b8418e6c33c..2da711f89dfaf 100644
+--- a/library/std/src/sys/pal/xous/os.rs
++++ b/library/std/src/sys/pal/xous/os.rs
+@@ -11,7 +11,7 @@ pub(crate) mod params;
+ static PARAMS_ADDRESS: Atomic<*mut u8> = AtomicPtr::new(core::ptr::null_mut());
+
+ #[cfg(not(test))]
+-#[cfg(feature = "panic_unwind")]
++#[cfg(feature = "panic-unwind")]
+ mod eh_unwinding {
+     pub(crate) struct EhFrameFinder;
+     pub(crate) static mut EH_FRAME_ADDRESS: usize = 0;
+@@ -45,7 +45,7 @@ mod c_compat {
+
+     #[unsafe(no_mangle)]
+     pub extern "C" fn _start(eh_frame: usize, params_address: usize) {
+-        #[cfg(feature = "panic_unwind")]
++        #[cfg(feature = "panic-unwind")]
+         {
+             unsafe { super::eh_unwinding::EH_FRAME_ADDRESS = eh_frame };
+             unwind::set_custom_eh_frame_finder(&super::eh_unwinding::EH_FRAME_SETTINGS).ok();
+diff --git a/library/std/src/sys/path/mod.rs b/library/std/src/sys/path/mod.rs
+index 254683bc83f91..eb95a918a0cbb 100644
+--- a/library/std/src/sys/path/mod.rs
++++ b/library/std/src/sys/path/mod.rs
+@@ -16,6 +16,10 @@ cfg_select! {
+         mod uefi;
+         pub use uefi::*;
+     }
++    target_os = "xous" => {
++        mod xous;
++        pub use xous::*;
++    }
+     target_os = "cygwin" => {
+         mod cygwin;
+         mod windows_prefix;
+diff --git a/library/std/src/sys/path/xous.rs b/library/std/src/sys/path/xous.rs
+new file mode 100644
+index 0000000000000..304929b4271ef
+--- /dev/null
++++ b/library/std/src/sys/path/xous.rs
+@@ -0,0 +1,268 @@
++use crate::ffi::OsStr;
++use crate::io;
++use crate::path::{Path, PathBuf, Prefix};
++
++#[inline]
++pub fn is_sep_byte(b: u8) -> bool {
++    b == b'/' || b == b':'
++}
++
++#[inline]
++pub fn is_verbatim_sep(b: u8) -> bool {
++    b == b'/'
++}
++
++#[inline]
++pub fn parse_prefix(_: &OsStr) -> Option<Prefix<'_>> {
++    None
++}
++
++pub const MAIN_SEP_STR: &str = "/";
++pub const MAIN_SEP: char = '/';
++pub const ALLOWED_SEP: &[char] = &['/', ':'];
++
++/// Make a POSIX path absolute without changing its semantics.
++pub(crate) fn absolute(path: &Path) -> io::Result<PathBuf> {
++    Ok(path.to_owned())
++}
++
++pub(crate) fn is_absolute(path: &Path) -> bool {
++    path.has_root() && path.prefix().is_some()
++}
++
++#[derive(Debug, PartialEq)]
++pub enum BasisSplitError {
++    /// This basis couldn't be split because it's the root element
++    Root,
++    /// This basis couldn't be split because it's listing all bases
++    All,
++    /// A path component was empty
++    EmptyComponent,
++}
++
++#[derive(Default, Debug, PartialEq)]
++pub struct SplitPath<'a> {
++    pub basis: Option<&'a str>,
++    pub dict: Option<&'a str>,
++    pub key: Option<&'a str>,
++}
++
++/// Split a path into its constituant Basis, Dict, and Key, if the path is legal.
++/// A Basis of `None` indicates the default Basis.
++pub fn split_basis_dict_key<'a>(src: &'a str) -> Result<SplitPath<'a>, BasisSplitError> {
++    let mut current_string = src;
++    let mut path = SplitPath::default();
++
++    // Special case for root
++    if src == ":" || src == "/" {
++        return Err(BasisSplitError::Root);
++    }
++    // Special case for listing all bases
++    if src == "::" || src == "//" || src == "/:" || src == ":/" {
++        return Err(BasisSplitError::All);
++    }
++
++    // If the string is an absolute path, then the first component is a basis
++    if let Some(src) = src.strip_prefix(ALLOWED_SEP) {
++        // See if we can split off a second separator which will get us the end
++        // of the Basis name
++        if let Some((maybe_basis, remainder)) = src.split_once(ALLOWED_SEP) {
++            // If the basis is empty, pull it from the default Basis function.
++            // Otherwise, use the specified basis.
++            if !maybe_basis.is_empty() {
++                path.basis = Some(maybe_basis);
++            }
++            current_string = remainder;
++        }
++    }
++
++    // Now that we have a fully-specified Basis, pull out the rest of the string.
++    if let Some(components) = current_string.rsplit_once(ALLOWED_SEP) {
++        let (mut dict, key) = components;
++        if let Some(stripped_dict) = dict.strip_prefix(ALLOWED_SEP) {
++            dict = stripped_dict;
++        }
++        // Don't allow empty dicts
++        if components.0.is_empty() {
++            return Err(BasisSplitError::EmptyComponent);
++        }
++        for path_component in dict.split(ALLOWED_SEP) {
++            if path_component.is_empty() {
++                return Err(BasisSplitError::EmptyComponent);
++            }
++        }
++
++        path.dict = Some(dict);
++        // Don't allow empty keys
++        if !key.is_empty() {
++            path.key = Some(key);
++        }
++    } else if !current_string.is_empty() {
++        path.dict = Some(current_string)
++    }
++
++    Ok(path)
++}
++
++#[cfg(test)]
++fn assert_basis_dict_key(test: &str, basis: Option<&str>, dict: Option<&str>, key: Option<&str>) {
++    let path = split_basis_dict_key(test).unwrap();
++    assert_eq!(path.basis, basis);
++    assert_eq!(path.dict, dict);
++    assert_eq!(path.key, key);
++}
++
++#[test]
++fn basis() {
++    // A basis named "Home Wifi"
++    assert_basis_dict_key(":Home Wifi:", Some("Home Wifi"), None, None);
++
++    // :.System: -- A basis named ".System"
++    assert_basis_dict_key(":.System:", Some(".System"), None, None);
++}
++
++#[test]
++fn dict() {
++    // wlan.networks -- A dict named "wlan.networks" in the default basis
++    assert_basis_dict_key("wlan.networks", None, Some("wlan.networks"), None);
++}
++
++#[test]
++fn key() {
++    // wlan.networks/recent -- A dict named "wlan.networks/recent", which may be considered a path, in the default basis. This also describes a key called "recent" in the dict "wlan.networks", depending on whether
++    assert_basis_dict_key(
++        "wlan.networks/recent",
++        None,
++        Some("wlan.networks"),
++        Some("recent"),
++    );
++}
++
++#[test]
++fn key_legacy() {
++    // wlan.networks/recent -- A dict named "wlan.networks:recent", which may be considered a path, in the default basis. This also describes a key called "recent" in the dict "wlan.networks", depending on whether
++    assert_basis_dict_key(
++        "wlan.networks:recent",
++        None,
++        Some("wlan.networks"),
++        Some("recent"),
++    );
++}
++
++#[test]
++fn dict_in_key() {
++    // :.System:wlan.networks -- A dict named "wlan.networks" in the basis ".System"
++    assert_basis_dict_key(
++        ":.System:wlan.networks",
++        Some(".System"),
++        Some("wlan.networks"),
++        None,
++    );
++}
++
++#[test]
++fn basis_dict_key() {
++    // :.System:wlan.networks/recent -- a fully-qualified path, describing a key "recent" in the dict "wlan.networks" in the basis ".System".
++    assert_basis_dict_key(
++        ":.System:wlan.networks/recent",
++        Some(".System"),
++        Some("wlan.networks"),
++        Some("recent"),
++    );
++}
++
++#[test]
++fn basis_dict_key_legacy() {
++    // :.System:wlan.networks:recent -- a fully-qualified path, describing a key "recent" in the dict "wlan.networks" in the basis ".System".
++    assert_basis_dict_key(
++        ":.System:wlan.networks:recent",
++        Some(".System"),
++        Some("wlan.networks"),
++        Some("recent"),
++    );
++}
++
++#[test]
++fn root() {
++    // : -- The root, which lists every basis. Files cannot be created here. "Directories" can be created and destroyed, which corresponds to creating and destroying bases.
++    assert_eq!(split_basis_dict_key(":"), Err(BasisSplitError::Root));
++    assert_eq!(split_basis_dict_key("/"), Err(BasisSplitError::Root));
++}
++
++#[test]
++fn all_bases() {
++    // :: -- An empty basis is a synonym for all bases, so this corresponds to listing all dicts in the root of the default basis.
++    assert_eq!(split_basis_dict_key("::"), Err(BasisSplitError::All));
++    assert_eq!(split_basis_dict_key("/:"), Err(BasisSplitError::All));
++    assert_eq!(split_basis_dict_key(":/"), Err(BasisSplitError::All));
++    assert_eq!(split_basis_dict_key("//"), Err(BasisSplitError::All));
++}
++
++#[test]
++fn space_basis() {
++    // : : -- A basis named " ". Legal, but questionable
++    assert_basis_dict_key(": :", Some(" "), None, None);
++}
++
++#[test]
++fn space_dict() {
++    // -- A dict named " " in the default basis. Legal, but questionable.
++    assert_basis_dict_key(" ", None, Some(" "), None);
++}
++
++#[test]
++fn legacy_dict_key() {
++    // : -- A key named " " in a dict called " ". Legal.
++    assert_basis_dict_key(" : ", None, Some(" "), Some(" "));
++}
++
++#[test]
++fn legacy_trailing_separator() {
++    // baz: -- A dict named "baz" in the default basis with an extra ":" following. Legal.
++    assert_basis_dict_key("baz:", None, Some("baz"), None);
++}
++
++#[test]
++fn legacy_trailing_separator_two_dicts() {
++    // baz:foo: -- Currently illegal, but may become equal to baz:foo in the future.
++    assert_basis_dict_key("baz:foo:", None, Some("baz:foo"), None);
++}
++
++#[test]
++fn empty_dict() {
++    // ::: -- An key named ":" in an empty dict in the default basis. Illegal.
++    assert_eq!(
++        split_basis_dict_key(":::"),
++        Err(BasisSplitError::EmptyComponent)
++    );
++}
++
++#[test]
++fn empty_key_empty_dict() {
++    // :::: -- An key named "::" in an empty dict in the default basis. Illegal.
++    assert_eq!(
++        split_basis_dict_key("::::"),
++        Err(BasisSplitError::EmptyComponent)
++    );
++}
++
++#[test]
++fn key_in_default_basis() {
++    // ::foo -- A dict "foo" in the default basis.
++    assert_basis_dict_key("::foo", None, Some("foo"), None);
++}
++
++#[test]
++fn starts_with_slash() {
++    assert_basis_dict_key("/test/path", Some("test"), Some("path"), None);
++}
++
++#[test]
++fn non_legacy_basis() {
++    assert_basis_dict_key(
++        "/.System/wlan.networks/recent",
++        Some(".System"),
++        Some("wlan.networks"),
++        Some("recent"),
++    );
++}
+diff --git a/library/std/tests/sync/mpsc.rs b/library/std/tests/sync/mpsc.rs
+index 9de4a71987b8e..5a985c2615c46 100644
+--- a/library/std/tests/sync/mpsc.rs
++++ b/library/std/tests/sync/mpsc.rs
+@@ -471,7 +471,7 @@ fn recv_timeout_upgrade() {
+ #[test]
+ fn stress_recv_timeout_shared() {
+     let (tx, rx) = channel();
+-    let stress = stress_factor() + 100;
++    let stress = stress_factor() + if cfg!(target_os = "xous") { 10 } else { 100 };
+
+     for i in 0..stress {
+         let tx = tx.clone();
+@@ -543,7 +543,7 @@ fn shared_recv_timeout() {
+ #[test]
+ fn shared_chan_stress() {
+     let (tx, rx) = channel();
+-    let total = stress_factor() + 100;
++    let total = stress_factor() + if cfg!(target_os = "xous") { 20 } else { 100 };
+     for _ in 0..total {
+         let tx = tx.clone();
+         thread::spawn(move || {
+diff --git a/library/std/tests/sync/mpsc_sync.rs b/library/std/tests/sync/mpsc_sync.rs
+index a7f326d201b00..fd64e60a22b5a 100644
+--- a/library/std/tests/sync/mpsc_sync.rs
++++ b/library/std/tests/sync/mpsc_sync.rs
+@@ -121,7 +121,7 @@ fn chan_gone_concurrent() {
+
+ #[test]
+ fn stress() {
+-    let count = if cfg!(miri) { 100 } else { 10000 };
++    let count = if cfg!(miri) || cfg!(target_os = "xous") { 100 } else { 10000 };
+     let (tx, rx) = sync_channel::<i32>(0);
+     thread::spawn(move || {
+         for _ in 0..count {
+@@ -135,7 +135,7 @@ fn stress() {
+
+ #[test]
+ fn stress_recv_timeout_two_threads() {
+-    let count = if cfg!(miri) { 100 } else { 10000 };
++    let count = if cfg!(miri) || cfg!(target_os = "xous") { 100 } else { 10000 };
+     let (tx, rx) = sync_channel::<i32>(0);
+
+     thread::spawn(move || {
+@@ -161,7 +161,7 @@ fn stress_recv_timeout_two_threads() {
+
+ #[test]
+ fn stress_recv_timeout_shared() {
+-    const AMT: u32 = if cfg!(miri) { 100 } else { 1000 };
++    const AMT: u32 = if cfg!(miri) || cfg!(target_os = "xous") { 100 } else { 1000 };
+     const NTHREADS: u32 = 8;
+     let (tx, rx) = sync_channel::<i32>(0);
+     let (dtx, drx) = sync_channel::<()>(0);
+@@ -201,7 +201,7 @@ fn stress_recv_timeout_shared() {
+
+ #[test]
+ fn stress_shared() {
+-    const AMT: u32 = if cfg!(miri) { 100 } else { 1000 };
++    const AMT: u32 = if cfg!(miri) || cfg!(target_os = "xous") { 100 } else { 1000 };
+     const NTHREADS: u32 = 8;
+     let (tx, rx) = sync_channel::<i32>(0);
+     let (dtx, drx) = sync_channel::<()>(0);
+@@ -448,7 +448,7 @@ fn stream_send_recv_stress() {
+
+ #[test]
+ fn recv_a_lot() {
+-    let count = if cfg!(miri) { 1000 } else { 10000 };
++    let count = if cfg!(miri) || cfg!(target_os = "xous") { 1000 } else { 10000 };
+     // Regression test that we don't run out of stack in scheduler context
+     let (tx, rx) = sync_channel(count);
+     for _ in 0..count {
+@@ -462,7 +462,7 @@ fn recv_a_lot() {
+ #[test]
+ fn shared_chan_stress() {
+     let (tx, rx) = sync_channel(0);
+-    let total = stress_factor() + 100;
++    let total = stress_factor() + if cfg!(target_os = "xous") { 20 } else { 100 };
+     for _ in 0..total {
+         let tx = tx.clone();
+         thread::spawn(move || {
+diff --git a/library/std/tests/time.rs b/library/std/tests/time.rs
+index 40709eae37cfc..cca14bd946e49 100644
+--- a/library/std/tests/time.rs
++++ b/library/std/tests/time.rs
+@@ -32,7 +32,7 @@ fn instant_monotonic_concurrent() -> std::thread::Result<()> {
+         .map(|_| {
+             std::thread::spawn(|| {
+                 let mut old = Instant::now();
+-                let count = if cfg!(miri) { 1_000 } else { 5_000_000 };
++                let count = if cfg!(miri) || cfg!(target_os = "xous") { 1_000 } else { 5_000_000 };
+                 for _ in 0..count {
+                     let new = Instant::now();
+                     assert!(new >= old);
+diff --git a/rebuild.ps1 b/rebuild.ps1
+new file mode 100755
+index 0000000000000..53f8a7bbc5a09
+--- /dev/null
++++ b/rebuild.ps1
+@@ -0,0 +1,119 @@
++# Everything you push to main will do a test build, and let you know if it breaks.
++#
++# Things only get released if you tag it. And the actual build is based on the tag.
++# Without tagging it, nothing is released and it doesn't affect anyone at all, aside
++# from people building it from source.
++#
++# Look at the list of tags:
++#
++# https://github.com/betrusted-io/rust/tags
++#
++# We increment the 4th decimal. So far with the 1.59.0 branch, we've had two releases: 1.59.0.1 and 1.59.0.2. If you decided to release a new version of libstd, you would do:
++#
++# git tag -a 1.59.0.3 # Commit a message, indicating what you've changed
++# git push --tags
++#
++# That would build and release a new version.
++
++$ErrorActionPreference = "Stop"
++
++Function Test-CommandExists {
++    Param ($command)
++    $oldPreference = $ErrorActionPreference
++    $ErrorActionPreference = 'stop'
++    try { if (Get-Command $command) { return $true } }
++    Catch { return $false }
++    Finally { $ErrorActionPreference = $oldPreference }
++} #end function test-CommandExists
++
++#$env:RUST_TARGET_PATH = $(rustc --print sysroot)
++$rust_sysroot = $(rustc --print sysroot)
++
++$env:RUST_COMPILER_RT_ROOT = "$(Get-Location)\src\llvm-project\compiler-rt"
++$env:CARGO_PROFILE_RELEASE_DEBUG = 0
++$env:CARGO_PROFILE_RELEASE_OPT_LEVEL = ""
++$env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = "true"
++$env:RUSTC_BOOTSTRAP = 1
++$env:RUSTFLAGS = "-Cforce-unwind-tables=yes -Cembed-bitcode=yes -Zforce-unstable-if-unmarked"
++$env:__CARGO_DEFAULT_LIB_METADATA = "stablestd"
++
++# Set up the C compiler. We need to explicitly specify these variables
++# because the `cc` package obviously doesn't recognize our target triple.
++if (Test-CommandExists riscv32-unknown-elf-gcc) {
++    $env:CC = "riscv32-unknown-elf-gcc"
++    $env:AR = "riscv32-unknown-elf-ar"
++}
++elseif (Test-CommandExists riscv-none-embed-gcc) {
++    $env:CC = "riscv-none-embed-gcc"
++    $env:AR = "riscv-none-embed-ar"
++}
++elseif (Test-CommandExists riscv-none-elf-gcc) {
++    $env:CC = "riscv-none-elf-gcc"
++    $env:AR = "riscv-none-elf-ar"
++}
++elseif (Test-CommandExists riscv64-unknown-elf-gcc) {
++    $env:CC = "riscv64-unknown-elf-gcc"
++    $env:AR = "riscv64-unknown-elf-ar"
++}
++else {
++    throw "No C compiler found for riscv"
++}
++
++$src_path = ".\library\target\riscv32imac-unknown-xous-elf\release\deps"
++$dest_path = "$rust_sysroot\lib\rustlib\riscv32imac-unknown-xous-elf"
++$dest_lib_path = "$dest_path\lib"
++function Get-ItemBaseName {
++    param ($ItemName)
++    # Write-Host "Item name: $ItemName"
++    $sub_strings = $ItemName -split "-"
++    $last_string_count = $sub_strings.Count
++    $ItemName -replace "-$($sub_strings[$last_string_count-1])", ""
++    # return $result
++}
++
++if (-Not( Test-Path $dest_lib_path)) {
++    New-Item -Path $dest_lib_path -ItemType Directory
++}
++
++$(rustc --version).split(" ")[1] | New-Item -Path "$dest_path\RUST_VERSION" -force
++
++# Remove stale objects
++Remove-Item "$dest_lib_path\*.rlib"
++
++$previous_libraries = @{}
++
++if (Test-Path $src_path) {
++    ForEach ($item in Get-ChildItem "$src_path\*.rlib") {
++        $base_string = Get-ItemBaseName ($item.Name)
++        # Write-Output "Base string is $base_string"
++        if ($previous_libraries.ContainsKey($base_string)) {
++            if (-not $base_string -like "libcfg_if*") {
++                throw "There is a duplicate of $base_string!"
++            }
++        } else {
++            $previous_libraries.add($base_string, $item.Name)
++        }
++    }
++}
++
++cargo build `
++    --target riscv32imac-unknown-xous-elf `
++    -Zbinary-dep-depinfo `
++    --release `
++    --features "panic-unwind compiler-builtins-c compiler-builtins-mem" `
++    --manifest-path "library/sysroot/Cargo.toml"
++if ($LastExitCode -ne 0) {
++    "Cargo exited with $LastExitCode"
++}
++
++ForEach ($item in Get-ChildItem "$src_path\*.rlib") {
++    $base_string = Get-ItemBaseName ($item.Name)
++    # Write-Output "Base string is $base_string"
++    if ($previous_libraries.ContainsKey($base_string)) {
++        if ($previous_libraries[$base_string] -ne $item.Name) {
++            Remove-Item "$src_path\$($previous_libraries[$base_string])"
++        }
++    }
++}
++
++Copy-Item "$src_path\*.rlib" "$dest_lib_path"
+diff --git a/rebuild.sh b/rebuild.sh
+new file mode 100755
+index 0000000000000..632da47e91532
+--- /dev/null
++++ b/rebuild.sh
+@@ -0,0 +1,93 @@
++#!/usr/bin/env bash
++# Everything you push to main will do a test build, and let you know if it breaks.
++#
++# Things only get released if you tag it. And the actual build is based on the tag.
++# Without tagging it, nothing is released and it doesn't affect anyone at all, aside
++# from people building it from source.
++#
++# Look at the list of tags:
++#
++# https://github.com/betrusted-io/rust/tags
++#
++# We increment the 4th decimal. So far with the 1.59.0 branch, we've had two releases: 1.59.0.1 and 1.59.0.2. If you decided to release a new version of libstd, you would do:
++#
++# git tag -a 1.59.0.3 # Commit a message, indicating what you've changed
++# git push --tags
++#
++# That would build and release a new version.
++
++if [ -z $RUST_TOOLCHAIN ]
++then
++    RUST_TOOLCHAIN=""
++fi
++
++set -e
++set -u
++# set -x
++set -o pipefail
++
++rust_sysroot=$(rustc $RUST_TOOLCHAIN --print sysroot)
++
++export RUST_COMPILER_RT_ROOT="$(pwd)/src/llvm-project/compiler-rt"
++export CARGO_PROFILE_RELEASE_DEBUG=0
++export CARGO_PROFILE_RELEASE_OPT_LEVEL="3"
++export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS="true"
++export RUSTC_BOOTSTRAP=1
++export RUSTFLAGS="-Cforce-unwind-tables=yes -Cembed-bitcode=yes -Zforce-unstable-if-unmarked"
++export __CARGO_DEFAULT_LIB_METADATA="stablestd"
++
++command_exists() {
++    which $1 &> /dev/null && $1 --version 2>&1 > /dev/null
++}
++
++# Set up the C compiler. We need to explicitly specify these variables
++# because the `cc` package obviously doesn't recognize our target triple.
++if [ ! -z $CC ]
++then
++    echo "Using compiler $CC"
++elif command_exists riscv32-unknown-elf-gcc
++then
++    export CC="riscv32-unknown-elf-gcc"
++    export AR="riscv32-unknown-elf-ar"
++elif command_exists riscv-none-embed-gcc
++then
++    export CC ="riscv-none-embed-gcc"
++    export AR ="riscv-none-embed-ar"
++elif command_exists riscv64-unknown-elf-gcc
++then
++    export CC="riscv64-unknown-elf-gcc"
++    export AR="riscv64-unknown-elf-ar"
++else
++    echo "No C compiler found for riscv" 1>&2
++    exit 1
++fi
++
++src_path="./library/target/riscv32imac-unknown-xous-elf/release/deps"
++dest_path="$rust_sysroot/lib/rustlib/riscv32imac-unknown-xous-elf"
++dest_lib_path="$dest_path/lib"
++
++mkdir -p $dest_lib_path
++
++rustc $RUST_TOOLCHAIN --version | awk '{print $2}' > "$dest_path/RUST_VERSION"
++
++# Remove stale objects
++rm -f $dest_lib_path/*.rlib
++
++# TODO: Use below to remove duplicates
++# previous_libraries=$(ls -1 $src_path/*.rlib)
++
++cargo $RUST_TOOLCHAIN build \
++    --target riscv32imac-unknown-xous-elf \
++    -Zbinary-dep-depinfo \
++    --release \
++    --features "panic-unwind compiler-builtins-c compiler-builtins-mem" \
++    --manifest-path "library/sysroot/Cargo.toml" || exit 1
++
++# TODO: Remove duplicates here by comparing it with $previous_libraries
++for new_item in $(ls -1 $src_path/*.rlib)
++do
++    file=$(basename $new_item)
++    base_string=$(echo $file | rev | cut -d- -f2- | rev)
++done
++
++cp $src_path/*.rlib "$dest_lib_path"

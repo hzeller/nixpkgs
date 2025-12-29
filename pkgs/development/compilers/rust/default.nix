@@ -65,6 +65,7 @@ in
   # anything provided prebuilt or their build-time dependencies to break
   # cycles / purify builds). In this way, nixpkgs would be in control of all
   # bootstrapping.
+
   packages = {
     prebuilt = callPackage ./bootstrap.nix {
       version = bootstrapVersion;
@@ -105,7 +106,9 @@ in
             fastCross
             ;
 
-          patches = rustcPatches;
+            patches = rustcPatches ++ [
+              ./1.91.0-xous.diff
+            ];
 
           # Use boot package set to break cycle
           inherit (bootstrapRustPackages) cargo rustc rustfmt;

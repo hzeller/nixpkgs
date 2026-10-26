@@ -3,19 +3,18 @@
   stdenv,
   buildBazelPackage,
   fetchFromGitHub,
-  bazel_7,
+  bazel_9,
   jdk,
   elfutils,
   libcap,
 }:
 
 let
-  system = stdenv.hostPlatform.system;
   registry = fetchFromGitHub {
     owner = "bazelbuild";
     repo = "bazel-central-registry";
-    rev = "dc643526b97838ffe421b833dd8b9c95e71702e8";
-    hash = "sha256-SLtrNU5uEt8rRJDUdV/IaI37CujsTHLlE31l2zYoRss=";
+    rev = "0aeaaaeee4bb913e21853a0ee0b935b2c114ae3f";
+    hash = "sha256-OZjzzwO2+SmlhJvkTaW26gNvmZx0amCLF6e6MGJkRlI=";
   };
 in
 buildBazelPackage {
@@ -29,22 +28,14 @@ buildBazelPackage {
     hash = "sha256-3YaaEQBlNenJihlEkAI3s4WyjOpWpV9rsfLyvubvfMU=";
   };
 
-  bazel = bazel_7;
+  bazel = bazel_9;
   bazelFlags = [
     "--registry"
     "file://${registry}"
   ];
 
   fetchAttrs = {
-    preInstall = ''
-      rm -rf $bazelOut/external/rules_shell~~sh_configure~local_config_shell
-    '';
-    hash =
-      {
-        aarch64-linux = "sha256-BlNTjS78QNuoiyIUFDmY5HeqIRJRVZQfrk5Y7+Q2DGo=";
-        x86_64-linux = "sha256-jOepM+Lor5RRIQEmdkwf3IJ1AAfbVq2VjMuwqjyfOio=";
-      }
-      .${system} or (throw "No hash for system: ${system}");
+    hash = "sha256-pel2SqLPTiEDXMOYZIGn7zKkdUl7gaHnWOuef2GrNJQ=";
   };
 
   nativeBuildInputs = [ jdk ];
@@ -53,8 +44,6 @@ buildBazelPackage {
     elfutils
     libcap
   ];
-
-  removeRulesCC = false;
 
   bazelBuildFlags = [ "-c opt" ];
   bazelTargets = [ "src:perf_to_profile" ];
